@@ -1,0 +1,127 @@
+#required inputs
+#need case / control def
+
+
+library(MonteCarlo)
+library(pROC)
+library(dplyr)
+library(ggplot2)
+
+#functions
+patients <- seq(1,10000)
+case <- rbinom(10000, 1, 0.2)
+
+meanphys_grid<-c(0.85,1,1.15)
+sdphys_grid<-c(0.5,1,2)
+sd_ppphys_grid<-c(0.5,1,2)
+difference_grid <- c(0,1,2)
+sample_case_grid <- c(1,2,5)
+sample_control_grid <- c(1,2,5)
+
+
+# collect parameter grids in list:
+param_list=list("meanphys"=meanphys_grid, "sdphys"=sdphys_grid, 
+                "sd_ppphys"=sd_ppphys_grid, "difference"=difference_grid,
+                "sample_time_case"=sample_case_grid,
+                "sample_time_control"= sample_control_grid)
+
+calculate_NEWS <- function(meanphys, sdphys, sd_ppphys, difference){
+  
+  d_meanBP <- meanphys *125
+  d_meanhr <- meanphys *80
+  d_meanRR <- meanphys * 17
+  
+  
+  #SD of BP/pulse/temp distibution in population
+  d_SDBP <- sdphys * 20
+  d_SDhr <- sdphys * 20
+  d_SDRR <- sdphys * 5
+  
+  #SD of BP/temp/pulse/hr/sp02 distribution within one person
+  
+  d_ppSDBP <- 10 * sd_ppphys
+  d_ppSDHR <- 10 *sd_ppphys
+  d_ppSDRR <- 1.5 *sd_ppphys
+  
+  
+  #difference between case + control
+  
+  d_diffbp <-  10 * difference
+  d_diffhr <-  1 * difference
+  d_diffRR <- 1 * difference 
+  
+  
+  #number of times physiology measured
+  
+  
+  
+  ############################# main work
+  
+  
+  
+  
+  #generate case or control (50% are cases)
+  
+  
+  #generate baseline BP + pulse + temp
+  baseline_BP <- rnorm(10000, d_meanBP, d_SDBP)
+  baseline_hr <- rnorm(10000, d_meanhr, d_SDhr)
+  baseline_RR <- rnorm(10000, d_meanRR, d_SDRR)
+  
+  
+  #if cases different
+  case_bp_difference <- (baseline_BP - d_diffbp)
+  case_hr_difference <- (baseline_hr + d_diffhr)
+  case_RR_difference <- (baseline_RR + d_diffRR)
+  
+  baseline_BP <-  ifelse(case ==0 ,baseline_BP, case_bp_difference)
+  baseline_hr <-  ifelse(case ==0 ,baseline_hr,case_hr_difference)
+  baseline_RR <-  ifelse(case ==0 ,baseline_RR, case_RR_difference )
+  
+  
+  
+  #sample from the distribution...
+  
+  
+  bp <-  rnorm(10000,baseline_BP, d_ppSDBP)
+  rr <-  rnorm(10000,baseline_RR, d_ppSDRR)
+  hr <-  rnorm(10000,baseline_hr, d_ppSDHR)
+  
+  
+  # calculate EWS
+  NEWS_BP <- findInterval(bp,c(90,100,110))
+  NEWS_BP <- 3-NEWS_BP
+  NEWS_HR <- findInterval(hr, c(90,110,130))
+  NEWS_RR <- findInterval(rr, c(21,25))
+  
+  NEWS <- NEWS_BP + NEWS_RR + NEWS_HR
+  
+  return(NEWS)
+}
+calculate_NEWS(1,1,1,20)
+
+#calculate NEWS differentially for cases and controls
+
+roc_estimate <- function(meanphys, sdphys, sd_ppphys, difference, sample_time_case, sample_time_control) {
+  
+  case_NEWS <- replicate(sample_time_case,(calculate_NEWS(meanphys, sdphys, sd_ppphys, difference)))
+  case_NEWS <- apply(case_NEWS, 1, FUN=max)
+  control_NEWS <- replicate(sample_time_control,(calculate_NEWS(meanphys, sdphys, sd_ppphys, difference)))
+  control_NEWS <- apply(control_NEWS, 1, FUN=max)
+  NEWS <- ifelse(case>0, case_NEWS, control_NEWS)
+  
+  study_table <- data.frame(patients, case, NEWS)
+  roc_result <- roc(study_table$case, study_table$NEWS)
+  roc_result <- roc_result$auc
+  roc_result <- as.vector(unlist(roc_result[]))
+  return(list( "auc"=roc_result))
+}
+
+
+roc_estimate(1,1,1,0,1,3)
+
+MC_result<-MonteCarlo(func=roc_estimate, nrep=10,param_list=param_list)  
+MakeTable(output=MC_result, rows=c( "sample_time_control"),cols=c("difference", "sample_time_case"), digits=2, include_meta=FALSE) 
+
+
+
